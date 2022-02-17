@@ -1,0 +1,54 @@
+---
+title: "Fusion single antigen bead data linking V2.0.rmd"
+output: html_notebook
+---
+
+```{r}
+#Loading libraries. The memory.limit function was required on the computer I used to increase the memory size so that large tables could be loaded. It may not be needed in all cases.
+library(tidyverse)
+memory.limit(size=56000)
+```
+#Single antigen bead (SAB) data in the HLA Fusion database is spread over several tables, and they need to be linked to compile usable results. This code starts with a list of samples from HistoTrac that had SAB testing, and links them to the Fusion tables to compile complete SAB results.
+```{r}
+#Load saved tables. Refer to other projects on github for code that produces these tables.
+
+#This is a HistoTrac table. The only requirement for a table like this is that it has to have a list of sample numbers that were tested by SAB. Those sample numbers have to align to the sample numbers stored in the Fusion server.
+(heart_study_patients <- readRDS("heart study patients post-transplant samples.rds"))
+
+#The rest are Fusion tables. See https://github.com/k96nb01/R_HLAFusion_extraction for code to extract these tables from Fusion.
+(Sample <- readRDS("Sample.rds"))
+(Well <- readRDS("Well.rds"))
+(Well_Detail <- readRDS("Well_Detail.rds"))
+(Tray <- readRDS("Tray.rds"))
+(Product <- readRDS("Product.rds"))
+(Product_detail <- readRDS("Product_detail.rds"))
+```
+
+```{r}
+#Join tables to compile SAB result table
+
+#The oldest samples did not have the exact HistoTrac accession number entered into Fusion - it had the patient's name appended. The code below extracts just the accession number so that all samples can be joined in the next set of code.
+(Fusion_sample <- Sample
+  %>% mutate(HT_accession = str_extract(SampleIDName, "^[:digit:]+-[:digit:]+"))
+ )
+
+#This filters the Fusion_sample table for only those samples that were run on the patients in our HistoTrac table, then joins to the other Fusion tables to make a complete table of SAB results.
+(Heart_SAB_results <- Fusion_sample 
+    %>% semi_join(heart_study_patients, by = c("HT_accession" = "SampleNbr"), suffix = c(".Fusion", ".HT")) 
+    %>% left_join(Well, by = "SampleID")
+    %>% left_join(Well_Detail, by = "WellID")
+    %>% left_join(Tray, by = "TrayID")
+    %>% left_join(Product, by = "CatalogID")
+    %>% left_join(Product_detail, by = c("CatalogID", "BeadID"))
+    %>% select(SampleIDName, HT_accession, NC1, PC1, BeadID:RawData, NormalValue:Ratio, Description, SpecAbbr, Specificity)
+  
+  #Remove all of the extra coding in the specificity fields so that just the bead specificities remain
+    %>% mutate(Bw4w6 = str_extract(SpecAbbr, "Bw[:digit:]"))
+    %>% mutate(SpecAbbr = str_extract(SpecAbbr, "[:alnum:]+"))
+    %>% mutate(Specificity_classI = str_extract(Specificity, "[ABC][:punct:][:alnum:]+[:punct:][:alnum:]+"))
+    %>% mutate(Specificity_alpha = str_extract(Specificity, "D[:alpha:]A1[:punct:][:alnum:]+[:punct:][:alnum:]+"))
+    %>% mutate(Specificity_beta = str_extract(Specificity, "D[:alpha:]B[:digit:][:punct:][:alnum:]+[:punct:][:alnum:]+"))
+    %>% select(SampleIDName:SpecAbbr, Bw4w6:Specificity_beta)
+  )
+```
+#Now you should have a table with many more rows: for each sample number that was tested by SAB, there will be one row for each bead. The MFI, and bead specificities will be included.
